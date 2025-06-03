@@ -73,7 +73,7 @@ async function startTracking() {
   }
   
   // Start sending frames to the server
-  streamInterval = setInterval(captureAndSendFrame, 1000); // testing at 1fps for now
+  streamInterval = setInterval(captureAndSendFrame, 100); //sending at 10 fps
 }
 
 // Capture video frame and send to Flask server
