@@ -1,0 +1,786 @@
+Blocked.js:
+
+// Get parameters from URL
+const urlParams = new URLSearchParams(window.location.search);
+const blockedSite = urlParams.get('site');
+const originalUrl = `https://${blockedSite}`;
+
+// DOM elements
+const videoElement = document.getElementById('videoElement');
+const pushupCountElement = document.getElementById('pushupCount');
+const requiredCountElement = document.getElementById('requiredCount');
+const requiredPushupsElement = document.getElementById('requiredPushups');
+const startButton = document.getElementById('startButton');
+const resetButton = document.getElementById('resetButton');
+const statusElement = document.getElementById('status');
+const errorElement = document.getElementById('error');
+const loadingElement = document.getElementById('loading');
+
+// Settings
+let requiredPushups = 10; // Default, will be updated from storage
+let currentCount = 0;
+let serverUrl = 'http://localhost:5001'; // Flask server URL
+let streamInterval;
+let isTracking = false;
+
+// Load required pushup count from storage
+chrome.runtime.sendMessage({ action: "getPushupCount" }, (response) => {
+  requiredPushups = response.pushupCount;
+  requiredCountElement.textContent = requiredPushups;
+  requiredPushupsElement.textContent = requiredPushups;
+});
+
+// Start camera stream
+async function setupCamera() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ 
+      video: { 
+        width: 640, 
+        height: 480,
+        facingMode: 'user' // Front camera
+      } 
+    });
+    
+    videoElement.srcObject = stream;
+    loadingElement.style.display = 'none';
+    return true;
+  } catch (error) {
+    console.error('Error accessing camera:', error);
+    errorElement.textContent = `Camera error: ${error.message}`;
+    loadingElement.style.display = 'none';
+    return false;
+  }
+}
+
+// Start tracking pushups
+async function startTracking() {
+  if (isTracking) return;
+  
+  const cameraReady = await setupCamera();
+  if (!cameraReady) return;
+  
+  statusElement.textContent = 'Tracking pushups...';
+  isTracking = true;
+  startButton.classList.add('disabled');
+  
+  // Reset the counter on the server
+  try {
+    await fetch(`${serverUrl}/api/reset_counter`, { method: 'POST' });
+    currentCount = 0;
+    pushupCountElement.textContent = currentCount;
+  } catch (error) {
+    errorElement.textContent = `Server error: ${error.message}`;
+    stopTracking();
+    return;
+  }
+  
+  // Start sending frames to the server
+  streamInterval = setInterval(captureAndSendFrame, 100); // 10 FPS
+}
+
+// Capture video frame and send to Flask server
+async function captureAndSendFrame() {
+  try {
+    // Create a canvas to capture the frame
+    const canvas = document.createElement('canvas');
+    canvas.width = videoElement.videoWidth;
+    canvas.height = videoElement.videoHeight;
+    
+    // Draw the current video frame to canvas
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
+    
+    // Convert to base64
+    const imageData = canvas.toDataURL('image/jpeg', 0.8);
+    
+    // Send to the server
+    const response = await fetch(`${serverUrl}/api/process_frame`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ frame: imageData })
+    });
+    
+    const data = await response.json();
+    
+    if (data.success) {
+      // Update the pushup count
+      currentCount = data.count;
+      pushupCountElement.textContent = currentCount;
+      
+      // Update status based on stage
+      if (data.stage === "up") {
+        statusElement.textContent = 'Push up position detected';
+      } else if (data.stage === "down") {
+        statusElement.textContent = 'Down position detected - keep going!';
+      }
+      
+      // Check if we've reached the required count
+      if (currentCount >= requiredPushups) {
+        completedPushups();
+      }
+    }
+  } catch (error) {
+    console.error('Error sending frame:', error);
+    errorElement.textContent = `Server connection error: ${error.message}`;
+  }
+}
+
+// Handle pushup completion
+function completedPushups() {
+  stopTracking();
+  statusElement.textContent = 'Great job! You can now access the site for 30 minutes.';
+  
+  // Unblock the site temporarily
+  chrome.runtime.sendMessage({ 
+    action: "temporarilyUnblock", 
+    domain: blockedSite,
+    duration: 30 * 60 * 1000, // 30 minutes
+    redirectUrl: originalUrl
+  });
+}
+
+// Stop tracking
+function stopTracking() {
+  isTracking = false;
+  if (streamInterval) {
+    clearInterval(streamInterval);
+  }
+  startButton.classList.remove('disabled');
+  
+  // Stop the camera
+  if (videoElement.srcObject) {
+    const tracks = videoElement.srcObject.getTracks();
+    tracks.forEach(track => track.stop());
+    videoElement.srcObject = null;
+  }
+}
+
+// Reset counter
+async function resetCounter() {
+  try {
+    await fetch(`${serverUrl}/api/reset_counter`, { method: 'POST' });
+    currentCount = 0;
+    pushupCountElement.textContent = currentCount;
+    statusElement.textContent = 'Counter reset';
+  } catch (error) {
+    errorElement.textContent = `Server error: ${error.message}`;
+  }
+}
+
+// Event listeners
+startButton.addEventListener('click', startTracking);
+resetButton.addEventListener('click', resetCounter);
+
+// Initialize
+document.addEventListener('DOMContentLoaded', () => {
+  statusElement.textContent = `Site blocked: ${blockedSite}`;
+});
+
+Blocked.html:
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Site Blocked - Do Some Pushups!</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+      text-align: center;
+    }
+    
+    h1 {
+      color: #4285f4;
+    }
+    
+    .container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    
+    .video-container {
+      width: 640px;
+      height: 480px;
+      margin: 20px 0;
+      background-color: #f0f0f0;
+      position: relative;
+    }
+    
+    #videoElement {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    
+    .pushup-counter {
+      font-size: 24px;
+      margin: 20px 0;
+    }
+    
+    .count {
+      font-weight: bold;
+      color: #4285f4;
+    }
+    
+    button {
+      background-color: #4285f4;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 16px;
+      margin: 10px;
+    }
+    
+    button:hover {
+      background-color: #3367d6;
+    }
+    
+    .disabled {
+      background-color: #cccccc;
+      cursor: not-allowed;
+    }
+    
+    .status {
+      margin-top: 10px;
+      font-style: italic;
+    }
+    
+    .error {
+      color: red;
+      margin: 10px 0;
+    }
+    
+    .loading {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      font-weight: bold;
+    }
+    #video{
+        position: absolute;
+        top: 165px;   
+        left: 1250px;
+        width: 145px; 
+        height: 450px;
+        object-fit: cover;
+        object-position: center;  
+    }
+  </style>
+</head>
+<body>
+  <h1>This site is blocked!</h1>
+  <p>Complete <span id="requiredPushups">loading...</span> pushups to unblock access for 30 minutes.</p>
+
+  <div class="container">
+    <div class="video-container">
+      <video id="videoElement" autoplay></video>
+      <div id="loading" class="loading">Loading camera...</div>
+    </div>
+
+    <div class = "subway">
+        <video id = "video" autoplay loop muted playsinline>
+            <source src = "subwaysurfers.mp4" type="video/mp4">
+        </video>
+    </div>
+    
+    <div class="pushup-counter">
+      Pushups completed: <span id="pushupCount" class="count">0</span> / <span id="requiredCount">loading...</span>
+    </div>
+    
+    <div>
+      <button id="startButton">Start Tracking</button>
+      <button id="resetButton">Reset Counter</button>
+    </div>
+    
+    <div id="status" class="status">Ready to track pushups</div>
+    <div id="error" class="error"></div>
+  </div>
+  
+  <script src="blocked.js"></script>
+</body>
+</html>
+
+Popup.js
+
+// Load settings when popup opens
+document.addEventListener('DOMContentLoaded', () => {
+  loadBlockedSites();
+  loadPushupCount();
+  
+  // Add event listeners
+  document.getElementById('savePushupCount').addEventListener('click', savePushupCount);
+  document.getElementById('addSite').addEventListener('click', addBlockedSite);
+});
+
+// Load and display blocked sites
+function loadBlockedSites() {
+  chrome.runtime.sendMessage({ action: "getBlockedSites" }, (response) => {
+    const siteList = document.getElementById('siteList');
+    siteList.innerHTML = '';
+    
+    response.blockedSites.forEach(site => {
+      const siteItem = document.createElement('div');
+      siteItem.className = 'site-item';
+      
+      const siteName = document.createElement('span');
+      siteName.textContent = site;
+      
+      const removeButton = document.createElement('button');
+      removeButton.className = 'remove-site';
+      removeButton.textContent = 'X';
+      removeButton.addEventListener('click', () => removeBlockedSite(site));
+      
+      siteItem.appendChild(siteName);
+      siteItem.appendChild(removeButton);
+      siteList.appendChild(siteItem);
+    });
+  });
+}
+
+// Load pushup count
+function loadPushupCount() {
+  chrome.runtime.sendMessage({ action: "getPushupCount" }, (response) => {
+    document.getElementById('pushupCount').value = response.pushupCount;
+  });
+}
+
+// Save pushup count
+function savePushupCount() {
+  const count = parseInt(document.getElementById('pushupCount').value);
+  if (count > 0) {
+    chrome.runtime.sendMessage({ 
+      action: "updatePushupCount", 
+      pushupCount: count 
+    });
+  }
+}
+
+// Add a new site to block
+function addBlockedSite() {
+  const newSite = document.getElementById('newSite').value.trim();
+  if (newSite) {
+    chrome.runtime.sendMessage({ action: "getBlockedSites" }, (response) => {
+      const blockedSites = response.blockedSites;
+      
+      // Only add if not already in the list
+      if (!blockedSites.includes(newSite)) {
+        blockedSites.push(newSite);
+        chrome.runtime.sendMessage({ 
+          action: "updateBlockedSites", 
+          blockedSites: blockedSites 
+        }, () => {
+          document.getElementById('newSite').value = '';
+          loadBlockedSites();
+        });
+      }
+    });
+  }
+}
+
+// Remove a site from blocked list
+function removeBlockedSite(site) {
+  chrome.runtime.sendMessage({ action: "getBlockedSites" }, (response) => {
+    const blockedSites = response.blockedSites.filter(s => s !== site);
+    chrome.runtime.sendMessage({ 
+      action: "updateBlockedSites", 
+      blockedSites: blockedSites 
+    }, () => {
+      loadBlockedSites();
+    });
+  });
+}
+
+popoup.html:
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PushupBlocker Settings</title>
+  <style>
+    body {
+      width: 300px;
+      padding: 10px;
+      font-family: Arial, sans-serif;
+    }
+    
+    h1 {
+      font-size: 18px;
+      margin-bottom: 10px;
+    }
+    
+    .section {
+      margin-bottom: 20px;
+    }
+    
+    label {
+      display: block;
+      margin-bottom: 5px;
+      font-weight: bold;
+    }
+    
+    input[type="text"] {
+      width: 100%;
+      padding: 5px;
+      margin-bottom: 5px;
+    }
+    
+    input[type="number"] {
+      width: 60px;
+      padding: 5px;
+    }
+    
+    button {
+      background-color: #4285f4;
+      color: white;
+      border: none;
+      padding: 8px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    
+    button:hover {
+      background-color: #3367d6;
+    }
+    
+    .site-list {
+      max-height: 150px;
+      overflow-y: auto;
+      margin-top: 10px;
+    }
+    
+    .site-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 5px;
+      border-bottom: 1px solid #eee;
+    }
+    
+    .remove-site {
+      background-color: #f44336;
+      color: white;
+      border: none;
+      padding: 2px 6px;
+      border-radius: 2px;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <h1>PushupBlocker Settings</h1>
+  
+  <div class="section">
+    <label for="pushupCount">Pushups Required to Unblock:</label>
+    <input type="number" id="pushupCount" min="1" max="100">
+    <button id="savePushupCount">Save</button>
+  </div>
+  
+  <div class="section">
+    <label for="newSite">Add Site to Block:</label>
+    <input type="text" id="newSite" placeholder="e.g., example.com">
+    <button id="addSite">Add</button>
+    
+    <div class="site-list" id="siteList">
+      <!-- Sites will be added here dynamically -->
+    </div>
+  </div>
+  
+  <script src="popup.js"></script>
+</body>
+</html>
+
+background.js:
+
+// Default blocked sites
+const DEFAULT_BLOCKED_SITES = [
+    "youtube.com",
+    "reddit.com",
+    "facebook.com",
+    "twitter.com",
+    "instagram.com",
+    "tiktok.com",
+    "instagram.com"
+  ];
+  
+  // Default pushup requirement
+  const DEFAULT_PUSHUP_COUNT = 10;
+  
+  // Initialize storage with defaults if not set
+  chrome.runtime.onInstalled.addListener(() => {
+    chrome.storage.local.get(['blockedSites', 'pushupCount'], (result) => {
+      if (!result.blockedSites) {
+        chrome.storage.local.set({ blockedSites: DEFAULT_BLOCKED_SITES });
+      }
+      if (!result.pushupCount) {
+        chrome.storage.local.set({ pushupCount: DEFAULT_PUSHUP_COUNT });
+      }
+      
+      // Initialize unblockTimers as an empty object
+      chrome.storage.local.set({ unblockTimers: {} });
+    });
+  });
+  
+  // Listen for web navigation and check if site is blocked
+  chrome.webNavigation.onBeforeNavigate.addListener((details) => {
+    if (details.frameId === 0) { // Main frame only
+      const url = new URL(details.url);
+      const domain = url.hostname.replace('www.', '');
+      
+      chrome.storage.local.get(['blockedSites', 'unblockTimers'], (result) => {
+        const blockedSites = result.blockedSites || [];
+        const unblockTimers = result.unblockTimers || {};
+        
+        // Check if the site is blocked and not temporarily unblocked
+        const isBlocked = blockedSites.some(site => domain.includes(site));
+        const isUnblocked = unblockTimers[domain] && unblockTimers[domain] > Date.now();
+        
+        if (isBlocked && !isUnblocked) {
+          // Redirect to blocked page
+          chrome.tabs.update(details.tabId, {
+            url: chrome.runtime.getURL("blocked.html") + "?site=" + domain
+          });
+        }
+      });
+    }
+  });
+  
+  // Listen for messages from popup or blocked page
+  chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request.action === "getBlockedSites") {
+      chrome.storage.local.get(['blockedSites'], (result) => {
+        sendResponse({ blockedSites: result.blockedSites || [] });
+      });
+      return true; // Required for async response
+    }
+    
+    if (request.action === "updateBlockedSites") {
+      chrome.storage.local.set({ blockedSites: request.blockedSites });
+      sendResponse({ success: true });
+      return true;
+    }
+    
+    if (request.action === "getPushupCount") {
+      chrome.storage.local.get(['pushupCount'], (result) => {
+        sendResponse({ pushupCount: result.pushupCount || DEFAULT_PUSHUP_COUNT });
+      });
+      return true;
+    }
+    
+    if (request.action === "updatePushupCount") {
+      chrome.storage.local.set({ pushupCount: request.pushupCount });
+      sendResponse({ success: true });
+      return true;
+    }
+    
+    if (request.action === "temporarilyUnblock") {
+      const domain = request.domain;
+      const durationMs = request.duration || 30 * 60 * 1000; // Default: 30 minutes
+      
+      chrome.storage.local.get(['unblockTimers'], (result) => {
+        const unblockTimers = result.unblockTimers || {};
+        unblockTimers[domain] = Date.now() + durationMs;
+        
+        chrome.storage.local.set({ unblockTimers }, () => {
+          sendResponse({ success: true });
+          
+          // Navigate to the unblocked site
+          if (request.redirectUrl) {
+            chrome.tabs.update(sender.tab.id, { url: request.redirectUrl });
+          }
+        });
+      });
+      return true;
+    }
+  });
+
+  manifest.json:
+  {
+  "manifest_version": 3,
+  "name": "PushupBlocker",
+  "version": "1.0",
+  "description": "Block distracting websites until you complete pushups",
+  "permissions": [
+    "storage",
+    "webNavigation",
+    "webRequest",
+    "tabs"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "images/icon16.png",
+      "48": "images/icon48.png",
+      "128": "images/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "images/icon16.png",
+    "48": "images/icon48.png",
+    "128": "images/icon128.png"
+  },
+  "web_accessible_resources": [{
+    "resources": ["blocked.html"],
+    "matches": ["<all_urls>"]
+  }]
+}
+
+pushup_counter.py:
+
+from flask import Flask, request, jsonify, Response
+import cv2
+import mediapipe as mp
+import numpy as np
+import base64
+import io
+from PIL import Image
+import time
+from flask_cors import CORS  # Added for handling CORS
+
+# Initialize MediaPipe Pose
+mp_drawing = mp.solutions.drawing_utils
+mp_pose = mp.solutions.pose
+
+def calculate_angle(a, b, c):
+    a = np.array(a)
+    b = np.array(b)
+    c = np.array(c)
+    
+    radians = np.arctan2(c[1] - b[1], c[0] - b[0]) - np.arctan2(a[1] - b[1], a[0] - b[0])
+    angle = np.abs(radians * 180.0 / np.pi)
+    
+    if angle > 180.0:
+        angle = 360 - angle
+        
+    return angle
+
+app = Flask(__name__)
+CORS(app)  # Enable CORS for all routes
+
+# Global counter and pose instance
+counter = 0
+stage = None
+last_pushup_time = 0
+pose = mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5)
+
+@app.route('/api/process_frame', methods=['POST'])
+def process_frame():
+    global counter, stage, last_pushup_time
+    
+    try:
+        # Get base64 encoded image from request
+        data = request.get_json()
+        if not data or 'frame' not in data:
+            return jsonify({"error": "No frame data received", "success": False}), 400
+            
+        frame_data = data['frame']
+        
+        # Decode base64 image
+        try:
+            # Handle both formats with and without data URL prefix
+            if ',' in frame_data:
+                frame_bytes = base64.b64decode(frame_data.split(',')[1])
+            else:
+                frame_bytes = base64.b64decode(frame_data)
+        except Exception as e:
+            return jsonify({"error": f"Base64 decoding error: {str(e)}", "success": False}), 400
+        
+        # Convert to OpenCV format
+        try:
+            image = Image.open(io.BytesIO(frame_bytes))
+            frame = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+        except Exception as e:
+            return jsonify({"error": f"Image conversion error: {str(e)}", "success": False}), 400
+        
+        # Process with MediaPipe
+        image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        image_rgb.flags.writeable = False
+        
+        # Make detection
+        results = pose.process(image_rgb)
+        
+        # Process landmarks if detected
+        if results.pose_landmarks:
+            landmarks = results.pose_landmarks.landmark
+            
+            # Get coordinates for right arm
+            right_shoulder = [landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER.value].x,
+                             landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER.value].y]
+            right_elbow = [landmarks[mp_pose.PoseLandmark.RIGHT_ELBOW.value].x,
+                          landmarks[mp_pose.PoseLandmark.RIGHT_ELBOW.value].y]
+            right_wrist = [landmarks[mp_pose.PoseLandmark.RIGHT_WRIST.value].x,
+                          landmarks[mp_pose.PoseLandmark.RIGHT_WRIST.value].y]
+            
+            # Calculate elbow angle
+            angle = calculate_angle(right_shoulder, right_elbow, right_wrist)
+            
+            # Check if enough landmarks visible to reliably detect a push-up
+            hip_visible = landmarks[mp_pose.PoseLandmark.RIGHT_HIP.value].visibility > 0.5
+            knee_visible = landmarks[mp_pose.PoseLandmark.RIGHT_KNEE.value].visibility > 0.5
+            
+            # Push-up logic
+            if hip_visible and knee_visible:
+                # Prevent count increments that are too rapid (debounce)
+                current_time = time.time()
+                
+                if angle > 160:
+                    new_stage = "up"
+                    if stage != new_stage:
+                        stage = new_stage
+                        
+                if angle < 90 and stage == "up":
+                    # Only count a pushup if enough time has passed
+                    if current_time - last_pushup_time > 0.5:  # 0.5 seconds minimum between pushups
+                        stage = "down"
+                        counter += 1
+                        last_pushup_time = current_time
+                        print(f"Push-up count: {counter}")
+        
+        return jsonify({
+            "count": counter,
+            "stage": stage if stage else "none",
+            "success": True
+        })
+    
+    except Exception as e:
+        print(f"Error processing frame: {e}")
+        return jsonify({"error": str(e), "success": False}), 500
+
+@app.route('/api/reset_counter', methods=['POST'])
+def reset_counter():
+    global counter, stage
+    counter = 0
+    stage = None
+    return jsonify({"success": True, "count": counter, "stage": "none"})
+
+@app.route('/api/status', methods=['GET'])
+def status():
+    return jsonify({"status": "running", "count": counter, "stage": stage if stage else "none"})
+
+# Simple health check endpoint
+@app.route('/', methods=['GET'])
+def health_check():
+    return jsonify({"status": "Pushup counter server is running"})
+
+if __name__ == '__main__':
+    print("Starting pushup counter server on http://localhost:5001")
+    print("Make sure to install dependencies: flask, flask-cors, opencv-python, mediapipe, numpy, pillow")
+    print("Press Ctrl+C to stop the server")
+    app.run(host='0.0.0.0', port=5001, debug=True)
