@@ -17,7 +17,7 @@ const loadingElement = document.getElementById('loading');
 // Settings
 let requiredPushups = 10; // Default, will be updated from storage
 let currentCount = 0;
-let serverUrl = 'http://localhost:5001'; // Flask server URL
+let serverUrl = 'https://pushblock.onrender.com'; // Flask server URL
 let streamInterval;
 let isTracking = false;
 
@@ -73,7 +73,7 @@ async function startTracking() {
   }
   
   // Start sending frames to the server
-  streamInterval = setInterval(captureAndSendFrame, 100); // 10 FPS
+  streamInterval = setInterval(captureAndSendFrame, 1000); // 10 FPS
 }
 
 // Capture video frame and send to Flask server
