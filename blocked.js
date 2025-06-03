@@ -17,8 +17,7 @@ const loadingElement = document.getElementById('loading');
 // Settings
 let requiredPushups = 10; // Default, will be updated from storage
 let currentCount = 0;
-let serverUrl = 'https://pushblock.onrender.com'; // Render URL
-
+let serverUrl = 'http://localhost:5001'; // Flask server URL
 let streamInterval;
 let isTracking = false;
 
