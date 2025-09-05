@@ -1,9 +1,0 @@
-services:
-  - type: web
-    name: pushup-detector
-    env: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn pushup_counter:app --bind 0.0.0.0:10000
-    envVars:
-      - key: PORT
-        value: 10000

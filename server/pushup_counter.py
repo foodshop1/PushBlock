@@ -68,7 +68,18 @@ def process_frame():
         image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         image_rgb.flags.writeable = False
 
-        results = pose.process(image_rgb)
+        # Make detection with error handling for MediaPipe timestamp issues
+        try:
+            results = pose.process(image_rgb)
+        except Exception as mp_error:
+            # If MediaPipe has timestamp errors, return current state without processing
+            print(f"MediaPipe processing error (continuing): {str(mp_error)}")
+            return jsonify({
+                "count": counter,
+                "stage": stage if stage else "none",
+                "success": True,
+                "warning": "Processing temporarily paused due to timing issues"
+            })
 
         if results.pose_landmarks:
             landmarks = results.pose_landmarks.landmark

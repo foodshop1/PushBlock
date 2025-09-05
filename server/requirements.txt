@@ -4,4 +4,3 @@ opencv-python
 mediapipe
 numpy
 pillow
-gunicorn

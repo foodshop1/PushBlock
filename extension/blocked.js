@@ -17,9 +17,10 @@ const loadingElement = document.getElementById('loading');
 // Settings
 let requiredPushups = 10; // Default, will be updated from storage
 let currentCount = 0;
-let serverUrl = 'http://localhost:5001'; // Flask server URL (http://localhost:5001) for local hosting
+let serverUrl = 'http://127.0.0.1:5001'; // Flask server URL for local hosting
 let streamInterval;
 let isTracking = false;
+let lastFrameTime = 0;
 
 // Load required pushup count from storage
 chrome.runtime.sendMessage({ action: "getPushupCount" }, (response) => {
@@ -72,12 +73,19 @@ async function startTracking() {
     return;
   }
   
-  // Start sending frames to the server
-  streamInterval = setInterval(captureAndSendFrame, 100); //sending at 10 fps
+  // Start sending frames to the server (reduced to 5 FPS to prevent MediaPipe errors)
+  streamInterval = setInterval(captureAndSendFrame, 200); // 5 FPS
 }
 
 // Capture video frame and send to Flask server
 async function captureAndSendFrame() {
+  // Skip frames if processing too quickly (prevent MediaPipe timestamp errors)
+  const currentTime = Date.now();
+  if (currentTime - lastFrameTime < 200) { // Minimum 200ms between frames
+    return;
+  }
+  lastFrameTime = currentTime;
+  
   try {
     // Create a canvas to capture the frame
     const canvas = document.createElement('canvas');
@@ -174,4 +182,10 @@ resetButton.addEventListener('click', resetCounter);
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
   statusElement.textContent = `Site blocked: ${blockedSite}`;
+  
+  // Set the subway surfers video source
+  const subwayVideoSource = document.getElementById('subwayVideoSource');
+  if (subwayVideoSource) {
+    subwayVideoSource.src = chrome.runtime.getURL("subwaysurfers.mp4");
+  }
 });
