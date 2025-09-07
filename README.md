@@ -2,6 +2,14 @@
 
 A Chrome extension that blocks distracting websites until you complete a set number of pushups, with AI-powered pushup detection using computer vision.
 
+## How to run? (locally)
+   - Start the server (run pushup_counter.py)
+   - Go to chrome://extensions/
+   - Turn on "Developer Mode" (top right corner)
+   - Select "Load Unpacked" (top left corner)
+   - Select the extention folder
+   - Begin your pushup journey!
+
 ## Project Structure
 
 ```
